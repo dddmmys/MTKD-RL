@@ -70,17 +70,24 @@ class CIFAR100Instance(CIFAR100BackCompat):
         return img, target, index
 
 
-def get_cifar100_dataloaders(data_folder, batch_size=128, num_workers=8, is_instance=False):
+def get_cifar100_dataloaders(data_folder, batch_size=128, num_workers=8, is_instance=False, shuffle_train=True, use_augmentation=True, drop_last=False):
     """
     cifar 100
     """
+    if use_augmentation:
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
+    else:
+        train_transform = transforms.Compose([
+            transforms.CenterCrop(32),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ])
 
-    train_transform = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-    ])
     test_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
@@ -99,8 +106,9 @@ def get_cifar100_dataloaders(data_folder, batch_size=128, num_workers=8, is_inst
                                       transform=train_transform)
     train_loader = DataLoader(train_set,
                               batch_size=batch_size,
-                              shuffle=True,
-                              num_workers=num_workers)
+                              shuffle=shuffle_train,
+                              num_workers=num_workers,
+                              drop_last=drop_last)
 
     test_set = datasets.CIFAR100(root=data_folder,
                                  download=True,

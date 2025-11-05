@@ -8,6 +8,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange
+from typing import Optional, Tuple, List
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 class SE(nn.Module):
     '''Squeeze-and-Excitation block.'''
@@ -72,7 +76,7 @@ class Block(nn.Module):
 
 
 class RegNet(nn.Module):
-    def __init__(self, cfg, num_classes=10):
+    def __init__(self, cfg, num_classes=10, num_codebooks: Tuple[int] = None, middle_output_layers: Tuple[int] = None, opt = None):
         super(RegNet, self).__init__()
         self.cfg = cfg
         self.in_planes = 64
@@ -86,6 +90,27 @@ class RegNet(nn.Module):
         self.layer4 = self._make_layer(3)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.linear = nn.Linear(self.cfg['widths'][-1], num_classes)
+
+        self.opt = opt
+        from QUAD.multi_quantization.prediction import JointCodebookLoss, AutomaticWeightedLoss
+        self.num_codebooks = num_codebooks
+        self.middle_output_layers = middle_output_layers
+        codebook_loss_nets = []
+        # single layer distillation
+        if  middle_output_layers is not None and len(middle_output_layers) == 1:
+            print ("start single layer distillation ... ")
+            codebook_loss_net = JointCodebookLoss(predictor_channels=(100 if middle_output_layers[0] == 5  else 368), num_codebooks=int(num_codebooks[0]), is_joint=False)
+            codebook_loss_nets.append(codebook_loss_net)
+            self.codebook_loss_nets = nn.ModuleList(codebook_loss_nets)
+        # multi layer distillation
+        if  middle_output_layers is not None and len(middle_output_layers) == 2:
+            print ("start multi layer distillation ... ")
+            for middle_output_layer, num_codebook in zip(middle_output_layers, num_codebooks):
+                codebook_loss_net = JointCodebookLoss(predictor_channels=(100 if middle_output_layer == 5  else 368), num_codebooks=int(num_codebook), is_joint=False)
+                codebook_loss_nets.append(codebook_loss_net)
+            self.codebook_loss_nets = nn.ModuleList(codebook_loss_nets)
+            if opt.layer_uncertainty:
+                self.awl = AutomaticWeightedLoss(9)
 
     def _make_layer(self, idx):
         depth = self.cfg['depths'][idx]
@@ -126,7 +151,7 @@ class RegNet(nn.Module):
         return feat_m
     
 
-    def forward(self, x, is_feat=False, preact=False, is_lr_adaptive=False):
+    def forward(self, x, is_feat=False, preact=False, is_lr_adaptive=False, codebook_indexes: List[torch.Tensor] = None, target=None, teacher_weights_layers: List[List[float]] = [[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]],):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)  # 32x32
@@ -153,6 +178,60 @@ class RegNet(nn.Module):
             else:
                 return [f0, f1, f2, f3, f4], x
         else:
+            if codebook_indexes is not None:
+                if len(codebook_indexes) == 8:
+                    group1_indices = [0, 2, 4, 6]  # 第1、3、5、7个张量，多教师第3层
+                    group2_indices = [1, 3, 5, 7]  # 第2、4、6、8个张量，多教师第5层
+                    group1 = torch.stack([codebook_indexes[i] for i in group1_indices], dim=0)  
+                    group2 = torch.stack([codebook_indexes[i] for i in group2_indices], dim=0) 
+                    codebook_indexes = []
+                    codebook_indexes.append(group1)
+                    codebook_indexes.append(group2)
+                if len(codebook_indexes) == 1:
+                    if self.middle_output_layers[0] == 3:
+                        from QUAD.example import convert_intermediate_layer
+                        for codebook_loss_net, codebook_index, teacher_weights  in zip(self.codebook_loss_nets, codebook_indexes, teacher_weights_layers):
+                            codebook_loss = codebook_loss_net(convert_intermediate_layer(f3), codebook_index, teacher_weights)
+                    if self.middle_output_layers[0] == 5:
+                        for codebook_loss_net, codebook_index, teacher_weights  in zip(self.codebook_loss_nets, codebook_indexes, teacher_weights_layers):
+                            codebook_loss = codebook_loss_net(x.unsqueeze(1), codebook_index, teacher_weights)
+                    return x, codebook_loss
+                if len(codebook_indexes) == 2:
+                    cb_loss = 0
+                    total_losses = []
+                    for codebook_loss_net, codebook_index, middle_output_layer, teacher_weights  in zip(self.codebook_loss_nets, codebook_indexes, self.middle_output_layers, teacher_weights_layers):
+                        if middle_output_layer == 3:
+                            from QUAD.example import convert_intermediate_layer
+                            if self.opt.multi_teacher:
+                                for i in range(4):
+                                    codebook_loss = codebook_loss_net(convert_intermediate_layer(f3), codebook_index[i], teacher_weights)
+                                    total_losses.append(codebook_loss)
+                            else:
+                                codebook_loss = codebook_loss_net(convert_intermediate_layer(f3), codebook_index, teacher_weights)
+                        elif middle_output_layer == 5:
+                            if self.opt.multi_teacher:
+                                for i in range(4):
+                                    codebook_loss = codebook_loss_net(x.unsqueeze(1), codebook_index[i], teacher_weights)
+                                    total_losses.append(codebook_loss)
+                            else:
+                                codebook_loss = codebook_loss_net(x.unsqueeze(1), codebook_index, teacher_weights)
+                        else:
+                            raise ValueError("invalid middle_output_layer!")
+                        assert (self.opt.layer_avg) != (self.opt.layer_uncertainty), "layer_avg 和 layer_uncertainty 必须有且仅有一个为 True"
+                        if self.opt.layer_avg:
+                            cb_loss += codebook_loss / len(self.middle_output_layers) * self.opt.layer_avg_weight
+                        if self.opt.layer_uncertainty:
+                            # total_losses.append(codebook_loss)
+                            if middle_output_layer == 5:
+                                criterion = nn.CrossEntropyLoss().cuda()
+                                task_loss = criterion(x, target)
+                                total_losses.append(task_loss)
+                                total_losses, weights = self.awl(total_losses)
+                                sigma_values = [f"{w.item():.4f}" for w in weights]
+                                print(f"uncertainty sigma is : {sigma_values}")
+                                for loss in total_losses:
+                                    cb_loss += loss
+                    return x, cb_loss
             return x
 
     # def forward(self, x):
@@ -167,7 +246,7 @@ class RegNet(nn.Module):
     #     return out
     
     
-def RegNetX_200MF(num_classes):
+def RegNetX_200MF(num_classes, num_codebooks: Tuple[int] = None, middle_output_layers: Tuple[int] = None,opt=None):
     cfg = {
         'depths': [1, 1, 4, 7],
         'widths': [24, 56, 152, 368],
@@ -176,7 +255,7 @@ def RegNetX_200MF(num_classes):
         'bottleneck_ratio': 1,
         'se_ratio': 0,
     }
-    return RegNet(cfg, num_classes)
+    return RegNet(cfg, num_classes, num_codebooks, middle_output_layers, opt)
 
 
 def RegNetX_400MF(num_classes):

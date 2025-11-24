@@ -33,26 +33,18 @@ def parse_option():
     parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
     parser.add_argument('--lr_decay_epochs', type=str, default='150,180,210', help='where to decay lr, can be a list')
     parser.add_argument('--lr_decay_rate', type=float, default=0.1, help='decay rate for learning rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
     parser.add_argument('--model', type=str, default='resnet110')
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100'], help='dataset')
-    parser.add_argument('--data-folder', type=str, default='/data/winycg/dataset', help='dataset path')
-    parser.add_argument('--checkpoint-dir', type=str, default='/data/winycg/checkpoints/mkd_checkpoints/', help='checkpoint dir')
+    parser.add_argument('--data-folder', type=str, default='./data/winycg/dataset', help='dataset path')
+    parser.add_argument('--checkpoint-dir', type=str, default='./data/winycg/checkpoints/mkd_checkpoints/', help='checkpoint dir')
     
     parser.add_argument('-t', '--trial', type=str, default='0', help='the experiment id')
     parser.add_argument('--dali', type=str, choices=['cpu', 'gpu'], default=None)
-
-    # multiprocessing
-    parser.add_argument('--multiprocessing-distributed', action='store_true',
-                    help='Use multi-processing distributed training to launch '
-                         'N processes per node, which has N GPUs. This is the '
-                         'fastest way to use PyTorch for either single node or '
-                         'multi node data parallel training')
-    parser.add_argument('--dist-url', default='tcp://127.0.0.1:23451', type=str,
-                    help='url used to set up distributed training')
+    parser.add_argument('--disabled-shuffle-and-augmentation', type=bool, default=False, help='disable or enable')
     
     opt = parser.parse_args()
 
@@ -61,7 +53,6 @@ def parse_option():
         opt.learning_rate = 0.01
 
     # set the path of model and tensorboard 
-
     opt.model_path = os.path.join(opt.checkpoint_dir, './models')
     opt.tb_path = os.path.join(opt.checkpoint_dir, './tensorboard')
 
@@ -96,10 +87,10 @@ def main():
     opt.multiprocessing_distributed = False
 
     # ASSIGN CUDA_ID
-    # os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu_id
     opt.gpu_id = os.environ.get('CUDA_VISIBLE_DEVICES', '0')
 
     ngpus_per_node = torch.cuda.device_count()
+    print("ngpus_per_node is ", ngpus_per_node)
     opt.ngpus_per_node = ngpus_per_node
     if opt.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
@@ -172,7 +163,13 @@ def main_worker(gpu, ngpus_per_node, opt):
 
     # dataloader
     if opt.dataset == 'cifar100':
-        train_loader, val_loader = get_cifar100_dataloaders(opt.data_folder, batch_size=opt.batch_size, num_workers=opt.num_workers)
+        # train_loader, val_loader = get_cifar100_dataloaders(opt.data_folder, batch_size=opt.batch_size, num_workers=opt.num_workers)
+        if opt.disabled_shuffle_and_augmentation:
+            print("====> Fixed dataset batch !")
+            train_loader, val_loader = get_cifar100_dataloaders(opt.data_folder, batch_size=opt.batch_size, num_workers=opt.num_workers, shuffle_train=False, use_augmentation=False, drop_last=True)
+        else:
+            print("====> Shuffled dataset batch !")
+            train_loader, val_loader = get_cifar100_dataloaders(opt.data_folder, batch_size=opt.batch_size, num_workers=opt.num_workers)
     else:
         raise NotImplementedError(opt.dataset)
 

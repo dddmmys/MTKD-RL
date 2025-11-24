@@ -79,7 +79,9 @@ def train_avg(train_loader, model, criterion_list, optimizer, epoch, device,
     train_loss = AverageMeter('train_loss', ':.4e')
     train_loss_cls = AverageMeter('train_loss_cls', ':.4e')
     train_loss_kd = AverageMeter('train_loss_kd', ':.4e')
-    train_loss_feat = AverageMeter('train_loss_feat', ':.4e')
+    if args.kd_feat_enable:
+        print("start distill with kd-feat ...")
+        train_loss_feat = AverageMeter('train_loss_feat', ':.4e')
 
     top1_num = 0
     top5_num = 0
@@ -124,55 +126,81 @@ def train_avg(train_loader, model, criterion_list, optimizer, epoch, device,
         for idx in range(len(teacher_models)):
             loss_kd = loss_kd + criterion_div(logits, teacher_logits[idx].detach())
         loss_kd = loss_kd / len(teacher_models)
-        loss_feat = torch.tensor(0.).cuda(args.gpu)
-        
-        if args.feat_kd == 'mse':
-            feat_kd_func = FeatureMSELoss()
-        elif args.feat_kd == 'kl':
-            feat_kd_func = FeatureKLLoss(args.kd_T)
+        if args.kd_feat_enable:
+            loss_feat = torch.tensor(0.).cuda(args.gpu)
+            
+            if args.feat_kd == 'mse':
+                feat_kd_func = FeatureMSELoss()
+            elif args.feat_kd == 'kl':
+                feat_kd_func = FeatureKLLoss(args.kd_T)
 
-        for idx in range(len(teacher_models)):
-            loss_feat = loss_feat +  (feat_kd_func(trans_student_features[idx], teacher_features[idx])).mean()
-        loss_feat = loss_feat / len(teacher_models)
-        loss_feat = args.feat_weight * loss_feat
-        
-        loss = loss_cls + loss_kd + loss_feat
+            for idx in range(len(teacher_models)):
+                loss_feat = loss_feat +  (feat_kd_func(trans_student_features[idx], teacher_features[idx])).mean()
+            loss_feat = loss_feat / len(teacher_models)
+            loss_feat = args.feat_weight * loss_feat
+            loss = loss_cls + loss_kd + loss_feat
+        else:
+            loss = loss_cls + loss_kd #+ loss_feat
         loss.backward()
         optimizer.step()
         
         train_loss.update(loss.item(), inputs.size(0))
         train_loss_cls.update(loss_cls.item(), inputs.size(0))
         train_loss_kd.update(loss_kd.item(), inputs.size(0))
-        train_loss_feat.update(loss_feat.item(), inputs.size(0))
+        if args.kd_feat_enable:
+            train_loss_feat.update(loss_feat.item(), inputs.size(0))
         
         top1, top5 = correct_num(logits, targets, topk=(1, 5))
         top1_num += top1
         top5_num += top5
         total += targets.size(0)
 
-        if args.rank == 0:
-            print('Epoch:{}, batch_idx:{}/{}, lr:{:.5f}, Duration:{:.2f}, CLS Loss:{:.2f},' 
-                'KD Loss:{:.2f}, Feature Loss:{:.2f}, Top-1 Acc:{:.2f}'.format(
-                epoch, batch_idx, len(train_loader), lr, time.time()-batch_start_time, 
-                train_loss_cls.avg, train_loss_kd.avg, train_loss_feat.avg, 
-                (top1_num/total*100.).item()))
+        if args.kd_feat_enable:
+            if args.rank == 0:
+                print('Epoch:{}, batch_idx:{}/{}, lr:{:.5f}, Duration:{:.2f}, CLS Loss:{:.2f},' 
+                    'KD Loss:{:.2f}, Feature Loss:{:.2f}, Top-1 Acc:{:.2f}'.format(
+                    epoch, batch_idx, len(train_loader), lr, time.time()-batch_start_time, 
+                    train_loss_cls.avg, train_loss_kd.avg, train_loss_feat.avg, 
+                    (top1_num/total*100.).item()))
+        else:
+            if args.rank == 0:
+                print('Epoch:{}, batch_idx:{}/{}, lr:{:.5f}, Duration:{:.2f}, CLS Loss:{:.2f},' 
+                    'KD Loss:{:.2f}, Top-1 Acc:{:.2f}'.format(
+                    epoch, batch_idx, len(train_loader), lr, time.time()-batch_start_time, 
+                    train_loss_cls.avg, train_loss_kd.avg,
+                    (top1_num/total*100.).item()))
     
     acc1 = top1_num / total
     acc5 = top5_num / total
 
-    if args.rank == 0:
-        args.logger.info('Epoch:{}\t lr:{:.4f}\t Duration:{:.3f}'
-                    '\n Train_loss:{:.5f}'
-                    '\t Train_loss_cls:{:.5f}'
-                    '\t Train_loss_kd:{:.5f}'
-                    '\t Train_loss_feat:{:.5f}'
-                    '\nTrain top-1 accuracy:{:.2f}'
-                    .format(epoch, lr, time.time() - start_time,
-                            train_loss.avg,
-                            train_loss_cls.avg,
-                            train_loss_kd.avg,
-                            train_loss_feat.avg,
-                            acc1*100.))
+    if args.kd_feat_enable:
+        if args.rank == 0:
+            args.logger.info('Epoch:{}\t lr:{:.4f}\t Duration:{:.3f}'
+                        '\n Train_loss:{:.5f}'
+                        '\t Train_loss_cls:{:.5f}'
+                        '\t Train_loss_kd:{:.5f}'
+                        '\t Train_loss_feat:{:.5f}'
+                        '\nTrain top-1 accuracy:{:.2f}'
+                        .format(epoch, lr, time.time() - start_time,
+                                train_loss.avg,
+                                train_loss_cls.avg,
+                                train_loss_kd.avg,
+                                train_loss_feat.avg,
+                                acc1*100.))
+    else:
+        if args.rank == 0:
+            args.logger.info('Epoch:{}\t lr:{:.4f}\t Duration:{:.3f}'
+                        '\n Train_loss:{:.5f}'
+                        '\t Train_loss_cls:{:.5f}'
+                        '\t Train_loss_kd:{:.5f}'
+                        # '\t Train_loss_feat:{:.5f}'
+                        '\nTrain top-1 accuracy:{:.2f}'
+                        .format(epoch, lr, time.time() - start_time,
+                                train_loss.avg,
+                                train_loss_cls.avg,
+                                train_loss_kd.avg,
+                                # train_loss_feat.avg,
+                                acc1*100.))
 
 
 

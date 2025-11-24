@@ -25,7 +25,7 @@ from torch.utils.tensorboard import SummaryWriter
 from models import model_dict
 from setting import  teacher_model_path_dict
 from dataset.cifar100 import get_cifar100_dataloaders
-from utils import set_logger
+from utils import set_logger, str2bool
 from models.util import Regress, TransFeat
 
 
@@ -45,11 +45,11 @@ parser.add_argument('-b', '--batch-size', default=64, type=int,
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')  # 32*2
                          
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.05, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
-parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
+parser.add_argument('--wd', '--weight-decay', default=1e-3, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
 parser.add_argument('-p', '--print-freq', default=10, type=int,
@@ -94,6 +94,7 @@ parser.add_argument('--checkpoint-dir', default='./checkpoint', type=str, help='
 parser.add_argument('--teacher-name-list', default=['resnet32x4', 'wrn_28_4'], type=str, nargs='+', help='teacher models')
 parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet', 'tinyimagenet', 'dogs', 'cub_200_2011', 'mit67'], help='dataset')
 parser.add_argument('--trial', type=str, default='1', help='trial id')
+parser.add_argument('--kd-feat-enable', type=str2bool, default=False, help='kd or kd-feat')
 
 
 def get_tensorboard_path(path):
@@ -141,7 +142,9 @@ def main():
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
-    args.distributed = args.world_size > 1 or args.multiprocessing_distributed # True
+    # args.distributed = args.world_size > 1 or args.multiprocessing_distributed # True
+    args.distributed = False
+    args.multiprocessing_distributed = False
     print(f'======> args.distributed is {args.distributed}')
 
     if torch.cuda.is_available():
@@ -218,6 +221,8 @@ def main_worker(gpu, ngpus_per_node, args):
     
     ##### load student model #####
     model = model_dict[args.arch](num_classes=args.n_cls).cuda()
+    parameters = sum(p.numel() for p in model.parameters())
+    args.logger.info(f"Parameters of model are {parameters}")
     
     args.start_epoch = 0
     if len(args.resume) != 0:
@@ -283,13 +288,13 @@ def main_worker(gpu, ngpus_per_node, args):
     trainable_list.append(feat_trans)
 
     optimizer = optim.SGD(trainable_list.parameters(),
-                        lr=0.1, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
+                        lr=args.init_lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
 
     ################### load data ###################
-    train_loader, val_loader = get_cifar100_dataloaders(data_folder=args.data,
-                                                        batch_size=args.batch_size,
-                                                        num_workers=args.workers)
-    
+    # train_loader, val_loader = get_cifar100_dataloaders(data_folder=args.data,
+    #                                                     batch_size=args.batch_size,
+    #                                                     num_workers=args.workers)
+    train_loader, val_loader = get_cifar100_dataloaders(data_folder=args.data, batch_size=args.batch_size, num_workers=args.workers, shuffle_train=False, use_augmentation=False, drop_last=True)
     ################### train model ###################
     best_acc = 0.  # best test accuracy
     

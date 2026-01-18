@@ -212,5 +212,58 @@ python train_student_lsmvq.py \
     --ls-sl True \
     --disabled-shuffle-and-augmentation True
 
+# resnet56 ------ resnet8 -------------------------------------------------------------------------------------------
+# baseline no distillation
+python train_baseline_student.py \
+    --model resnet8 \
+    --data-folder ./data/cifar100 \
+    --checkpoint-dir ./data/second/baseline-student/resnet8/  \
+    --disabled-shuffle-and-augmentation True
+
+# mvq single layer
+python train_student_lsmvq.py \
+    --model resnet8 \
+    --data-folder ./data/cifar100 \
+    --checkpoint-dir ./data/second/ls-mvq/stsl5/resnet8_8/ \
+    --num-codebooks "8" \
+    --middle-output-layers "5" \
+    --teacher-name-list resnet56 \
+    --disabled-shuffle-and-augmentation True
+
+# mvq multi layers
+python train_student_lsmvq.py \
+    --model resnet8 \
+    --data-folder ./data/cifar100 \
+    --checkpoint-dir ./data/second/ls-mvq/stml35/resnet8_16_8/ \
+    --num-codebooks "16,8" \
+    --middle-output-layers "3,5" \
+    --teacher-name-list resnet56 \
+    --layer-avg True \
+    --disabled-shuffle-and-augmentation True
+
+# lsmvq single layer
+python train_student_lsmvq.py \
+    --model resnet8 \
+    --data-folder ./data/cifar100 \
+    --checkpoint-dir ./data/second/ls-mvq/mtsl5/resnet8_8/ \
+    --num-codebooks "16,8" \
+    --middle-output-layers "3,5" \
+    --teacher-name-list resnet56 RegNetX_400MF \
+    --layer-avg True \
+    --multi-teacher True \
+    --ls-sl True \
+    --disabled-shuffle-and-augmentation True
+
+# lsmvq multi layers
+python train_student_lsmvq.py \
+    --model resnet8 \
+    --data-folder ./data/cifar100 \
+    --checkpoint-dir ./data/second/ls-mvq/mtml35/resnet8_16_8/ \
+    --num-codebooks "16,8" \
+    --middle-output-layers "3,5" \
+    --teacher-name-list resnet56 RegNetX_400MF \
+    --layer-avg True \
+    --multi-teacher True \
+    --disabled-shuffle-and-augmentation True
 
 fi
